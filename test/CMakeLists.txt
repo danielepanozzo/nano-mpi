@@ -9,7 +9,8 @@ set(NANOMPI_TESTS
   t_datatype
   t_comm
   t_inplace
-  t_team)
+  t_team
+  t_win)
 
 set(NANOMPI_RANK_COUNTS 1 2 3 4 7 8)
 

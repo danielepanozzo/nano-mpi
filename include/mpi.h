@@ -45,6 +45,7 @@ typedef int MPI_Request;
 typedef int MPI_Op;
 typedef int MPI_Info;
 typedef int MPI_Errhandler;
+typedef int MPI_Win;
 
 typedef intptr_t  MPI_Aint;
 typedef long long MPI_Offset;
@@ -174,6 +175,7 @@ typedef struct { long double value; int index; } MPI_Long_double_int;
 #define MPI_REQUEST_NULL     0
 #define MPI_INFO_NULL        0
 #define MPI_ERRHANDLER_NULL  0
+#define MPI_WIN_NULL         0
 
 /* Thread support levels; see SCOPE.md section 7 */
 #define MPI_THREAD_SINGLE     0
@@ -352,6 +354,37 @@ int MPI_Type_size(MPI_Datatype datatype, int *size);
 int MPI_Type_extent(MPI_Datatype datatype, MPI_Aint *extent);
 int MPI_Address(const void *location, MPI_Aint *address);
 int MPI_Get_address(const void *location, MPI_Aint *address);
+
+/*--------------------------------------------------------------------------
+ * Shared-memory windows
+ *
+ * The one part of MPI's one-sided chapter that is trivially true here: ranks
+ * are threads of one process, so they already share an address space. A window
+ * is therefore a real allocation plus everyone's offset into it, and you touch
+ * it with ordinary loads and stores.
+ *
+ * MPI_Put, MPI_Get and MPI_Accumulate are NOT provided, so this is not general
+ * RMA. Fence, sync and lock_all are synchronisation points, which is all they
+ * can be when the memory is genuinely shared.
+ *--------------------------------------------------------------------------*/
+#define MPI_MODE_NOCHECK    1024
+#define MPI_MODE_NOSTORE    2048
+#define MPI_MODE_NOPUT      4096
+#define MPI_MODE_NOPRECEDE  8192
+#define MPI_MODE_NOSUCCEED 16384
+
+#define MPI_LOCK_EXCLUSIVE  1
+#define MPI_LOCK_SHARED     2
+
+int MPI_Win_allocate_shared(MPI_Aint size, int disp_unit, MPI_Info info,
+                            MPI_Comm comm, void *baseptr, MPI_Win *win);
+int MPI_Win_shared_query(MPI_Win win, int rank, MPI_Aint *size,
+                         int *disp_unit, void *baseptr);
+int MPI_Win_free(MPI_Win *win);
+int MPI_Win_fence(int assert_, MPI_Win win);
+int MPI_Win_sync(MPI_Win win);
+int MPI_Win_lock_all(int assert_, MPI_Win win);
+int MPI_Win_unlock_all(MPI_Win win);
 
 /*--------------------------------------------------------------------------
  * Info

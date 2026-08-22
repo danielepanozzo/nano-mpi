@@ -49,9 +49,10 @@ Present and intended to work:
 | Datatypes | `MPI_Type_contiguous`, `MPI_Type_vector`, `MPI_Type_hvector`, `MPI_Type_create_hvector`, `MPI_Type_struct`, `MPI_Type_create_struct`, `MPI_Type_commit`, `MPI_Type_free`, `MPI_Type_size`, `MPI_Type_extent`, `MPI_Get_address`, `MPI_Address` |
 | Reductions | `MPI_MAX MIN SUM PROD LAND BAND LOR BOR LXOR BXOR MAXLOC MINLOC REPLACE`, and `MPI_Op_create` / `MPI_Op_free` for user operators |
 | Info | `MPI_Info_create`, `MPI_Info_free` (accepted, carry no keys) |
+| Shared-memory windows | `MPI_Win_allocate_shared`, `MPI_Win_shared_query`, `MPI_Win_free`, `MPI_Win_fence`, `MPI_Win_sync`, `MPI_Win_lock_all`, `MPI_Win_unlock_all` |
 | Timing | `MPI_Wtime`, `MPI_Wtick` |
 
-That is **85 entry points**. The full predefined datatype set of MPI-3 C is
+That is **92 entry points**. The full predefined datatype set of MPI-3 C is
 present, including the fixed-width `MPI_INT8_T` … `MPI_UINT64_T`, `MPI_C_BOOL`,
 the complex types, and the `MPI_FLOAT_INT`-style pair types.
 
@@ -72,7 +73,7 @@ surprise — which is deliberate: you find out at build time.
 | Absent | Why |
 |---|---|
 | `MPI_Issend` | A synchronous send must not complete until the matching receive is posted. Sends here are eagerly buffered, so implementing it as `MPI_Isend` would be silently wrong for the one thing `Issend` is used to detect. Absent until it can be real. |
-| One-sided / RMA (`MPI_Win_*`) | Not yet implemented. Nothing in the design prevents it; it is simply out of scope for 0.x. |
+| `MPI_Put`, `MPI_Get`, `MPI_Accumulate` and the rest of RMA | The *shared-memory* half of the one-sided chapter is supported and is listed above -- ranks are threads, so a shared window is a real allocation plus everyone's offset into it, touched with ordinary loads and stores. Data-moving RMA on top of that would be a copy from memory you can already address, and is not provided. |
 | Parallel I/O (`MPI_File_*`) | Needs ROMIO or an equivalent. A separate project. |
 | Dynamic processes (`MPI_Comm_spawn`, ports, names) | **Impossible here.** There are no processes to spawn. |
 | Fortran bindings | **Impossible here.** Fortran `SAVE` and `COMMON` storage is per-process by language rule; see §5. |

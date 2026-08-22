@@ -170,14 +170,21 @@ race in your own code, building against a sanitized nano-mpi is a good idea.
 
 ## What is and is not implemented
 
-85 entry points: point-to-point (blocking, nonblocking, persistent, probes,
+92 entry points: point-to-point (blocking, nonblocking, persistent, probes,
 wildcards, `MPI_PROC_NULL`), the twelve common collectives with `MPI_IN_PLACE`,
 communicators and groups, derived datatypes, the full predefined datatype set of
 MPI-3 C, all the predefined reduction operators including `MPI_MAXLOC` /
-`MPI_MINLOC`, and user-defined operators.
+`MPI_MINLOC`, user-defined operators, and **shared-memory windows**.
+
+Shared windows are the one part of MPI's one-sided chapter that is trivially
+true here: ranks are threads, so `MPI_Win_allocate_shared` is a real allocation
+plus everyone's offset into it, and you touch it with ordinary loads and stores.
+The layout MPI promises -- every rank's segment concatenated in rank order --
+is what `MPI_Win_shared_query` reports. `MPI_Put` / `MPI_Get` are not provided:
+they would be a copy from memory you can already address.
 
 Deliberately absent, so that calling them is a **link error rather than a
-runtime surprise**: one-sided/RMA, parallel I/O, dynamic process management
+runtime surprise**: data-moving RMA, parallel I/O, dynamic process management
 (impossible — there are no processes to spawn), Fortran bindings (impossible —
 Fortran `SAVE` storage is per-process by language rule), `MPI_T`, sessions, and
 error handlers.

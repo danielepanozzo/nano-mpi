@@ -2588,6 +2588,190 @@ int MPI_Op_create( MPI_User_function *function, int commute,
    return 0;
 }
 
+/*--------------------------------------------------------------------------
+ * Shared-memory windows
+ *
+ * Ranks are threads, so "shared memory" needs no mapping tricks: one rank
+ * allocates the whole block and everyone learns the pointer. What still has to
+ * be right is the layout MPI promises -- the window is the concatenation of
+ * every rank's segment, in rank order, contiguously -- because that is what
+ * MPI_Win_shared_query is asked about and what real code walks.
+ *
+ * There is no MPI_Put/Get/Accumulate. You have the pointer; use it.
+ *--------------------------------------------------------------------------*/
+#define NMPI_MAX_WINS 256
+
+typedef struct
+{
+   int       used;
+   char     *base;    /* whole block; NULL when every segment is empty */
+   size_t    total;
+   MPI_Comm  comm;
+   int       size;    /* number of ranks in comm */
+   size_t   *off;     /* byte offset of each rank's segment */
+   size_t   *len;     /* bytes in each rank's segment */
+   int      *disp;    /* each rank's disp_unit */
+   int       owner;   /* comm rank that allocated, and will free */
+} nmpi_win;
+
+static nmpi_win        g_win[NMPI_MAX_WINS];
+static pthread_mutex_t g_win_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static nmpi_win *win_get(MPI_Win w)
+{
+   if (w <= 0 || w >= NMPI_MAX_WINS || !g_win[w].used) { return NULL; }
+   return &g_win[w];
+}
+
+static int win_alloc(void)
+{
+   int i, h = -1;
+   pthread_mutex_lock(&g_win_mtx);
+   for (i = 1; i < NMPI_MAX_WINS; i++) { if (!g_win[i].used) { h = i; break; } }
+   if (h >= 0) { g_win[h].used = 1; }
+   pthread_mutex_unlock(&g_win_mtx);
+   if (h < 0) { fprintf(stderr, "nano-mpi: out of window handles\n"); abort(); }
+   return h;
+}
+
+typedef struct { size_t bytes; int disp; } nmpi_win_seg;
+
+int MPI_Win_allocate_shared( MPI_Aint size, int disp_unit, MPI_Info info,
+                             MPI_Comm comm, void *baseptr, MPI_Win *win )
+{
+   int me = comm_rank_of(comm), sz = comm_size_of(comm), i;
+   nmpi_win_seg  mine, *segs;
+   nmpi_win     *w;
+   struct { void *base; int handle; } hdr;
+
+   NANOMPI_UNUSED(info);
+   if (size < 0 || sz <= 0) { return MPI_ERR_ARG; }
+
+   mine.bytes = (size_t) size;
+   mine.disp  = disp_unit;
+   segs = (nmpi_win_seg *) malloc(sizeof(nmpi_win_seg) * (size_t) sz);
+   if (!segs) { return MPI_ERR_NO_MEM; }
+   MPI_Allgather(&mine, (int) sizeof mine, MPI_BYTE,
+                 segs,  (int) sizeof mine, MPI_BYTE, comm);
+
+   hdr.base = NULL; hdr.handle = MPI_WIN_NULL;
+   if (me == 0)
+   {
+      size_t total = 0;
+      for (i = 0; i < sz; i++) { total += segs[i].bytes; }
+      /* MPI says a freshly allocated window is not zeroed, but zeroing it turns
+         a whole class of "forgot to initialise" bugs into reproducible ones. */
+      hdr.base   = total ? calloc(1, total) : NULL;
+      if (total && !hdr.base) { free(segs); return MPI_ERR_NO_MEM; }
+      hdr.handle = win_alloc();
+
+      w = &g_win[hdr.handle];
+      w->base  = (char *) hdr.base;
+      w->total = total;
+      w->comm  = comm;
+      w->size  = sz;
+      w->owner = 0;
+      w->off   = (size_t *) malloc(sizeof(size_t) * (size_t) sz);
+      w->len   = (size_t *) malloc(sizeof(size_t) * (size_t) sz);
+      w->disp  = (int *)    malloc(sizeof(int)    * (size_t) sz);
+      {
+         size_t at = 0;
+         for (i = 0; i < sz; i++)
+         {
+            w->off[i]  = at;
+            w->len[i]  = segs[i].bytes;
+            w->disp[i] = segs[i].disp;
+            at += segs[i].bytes;
+         }
+      }
+   }
+   MPI_Bcast(&hdr, (int) sizeof hdr, MPI_BYTE, 0, comm);
+   free(segs);
+
+   w = win_get(hdr.handle);
+   if (!w) { return MPI_ERR_INTERN; }
+
+   *(void **) baseptr = w->len[me] ? (w->base + w->off[me]) : NULL;
+   *win = hdr.handle;
+   return MPI_SUCCESS;
+}
+
+int MPI_Win_shared_query( MPI_Win win, int rank, MPI_Aint *size,
+                          int *disp_unit, void *baseptr )
+{
+   nmpi_win *w = win_get(win);
+   int r = rank;
+
+   if (!w) { return MPI_ERR_ARG; }
+   if (r == MPI_PROC_NULL)
+   {
+      /* the standard's answer for MPI_PROC_NULL: the first non-empty segment */
+      for (r = 0; r < w->size && w->len[r] == 0; r++) { }
+      if (r == w->size) { r = 0; }
+   }
+   if (r < 0 || r >= w->size) { return MPI_ERR_RANK; }
+
+   if (size)      { *size      = (MPI_Aint) w->len[r]; }
+   if (disp_unit) { *disp_unit = w->disp[r]; }
+   *(void **) baseptr = w->len[r] ? (w->base + w->off[r]) : NULL;
+   return MPI_SUCCESS;
+}
+
+int MPI_Win_free( MPI_Win *win )
+{
+   nmpi_win *w;
+   int me;
+
+   if (!win) { return MPI_ERR_ARG; }
+   w = win_get(*win);
+   if (!w) { *win = MPI_WIN_NULL; return MPI_SUCCESS; }
+
+   me = comm_rank_of(w->comm);
+   comm_barrier(w->comm);          /* nobody may still be reading the block */
+   if (me == w->owner)
+   {
+      pthread_mutex_lock(&g_win_mtx);
+      free(w->base); free(w->off); free(w->len); free(w->disp);
+      w->base = NULL; w->off = NULL; w->len = NULL; w->disp = NULL;
+      w->used = 0;
+      pthread_mutex_unlock(&g_win_mtx);
+   }
+   comm_barrier(w->comm);          /* and nobody may free it twice */
+   *win = MPI_WIN_NULL;
+   return MPI_SUCCESS;
+}
+
+/* The memory is genuinely shared, so these carry no data. What they do carry is
+   ordering, which still matters: a store by one rank is only guaranteed visible
+   to another after a synchronisation point. */
+int MPI_Win_fence( int assert_, MPI_Win win )
+{
+   nmpi_win *w = win_get(win);
+   NANOMPI_UNUSED(assert_);
+   if (!w) { return MPI_ERR_ARG; }
+   __atomic_thread_fence(__ATOMIC_SEQ_CST);
+   comm_barrier(w->comm);
+   return MPI_SUCCESS;
+}
+
+int MPI_Win_sync( MPI_Win win )
+{
+   if (!win_get(win)) { return MPI_ERR_ARG; }
+   __atomic_thread_fence(__ATOMIC_SEQ_CST);
+   return MPI_SUCCESS;
+}
+
+int MPI_Win_lock_all( int assert_, MPI_Win win )
+{
+   NANOMPI_UNUSED(assert_);
+   return win_get(win) ? MPI_SUCCESS : MPI_ERR_ARG;
+}
+
+int MPI_Win_unlock_all( MPI_Win win )
+{
+   return MPI_Win_sync(win);
+}
+
 int MPI_Info_create( MPI_Info *info ) { *info = 0; return 0; }
 int MPI_Info_free( MPI_Info *info ) { NANOMPI_UNUSED(info); return 0; }
 
