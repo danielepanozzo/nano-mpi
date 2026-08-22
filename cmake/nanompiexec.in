@@ -1,0 +1,36 @@
+#!/bin/sh
+# nano-mpi "launcher".
+#
+# There is nothing to launch: ranks are threads of the program you are about to
+# run. All this does is translate -n / -np into NANOMPI_NUM_RANKS and exec the
+# program, so that a build system or a script written for mpiexec keeps working.
+#
+# The program still has to create its ranks -- nanompi_run(0, ...) or
+# nanompi_team_start(0, ...) -- because there is no launcher to do it. A count
+# of 0 means "take the default", which is what makes this variable visible.
+
+ranks=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n|-np|--n|--np|-c) ranks="$2"; shift 2 ;;
+    --nranks=*)         ranks="${1#--nranks=}"; shift ;;
+    -h|--help)
+        echo "usage: nanompiexec [-n RANKS] program [args...]"
+        echo "sets NANOMPI_NUM_RANKS and execs the program; there is no daemon."
+        exit 0 ;;
+    --) shift; break ;;
+    *)  break ;;
+  esac
+done
+
+if [ $# -eq 0 ]; then
+  echo "nanompiexec: no program given" >&2
+  exit 2
+fi
+
+if [ -n "$ranks" ]; then
+  NANOMPI_NUM_RANKS="$ranks"
+  export NANOMPI_NUM_RANKS
+fi
+
+exec "$@"

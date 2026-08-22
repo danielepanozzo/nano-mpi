@@ -1,0 +1,29 @@
+#!/bin/sh
+# nano-mpi C compiler wrapper.
+#
+# There is no MPI runtime to link against beyond libnanompi and pthreads, so
+# this is a thin -I/-L/-l front end. It answers the -show* queries that
+# CMake's FindMPI and the autotools macros use to discover an MPI, which is
+# what lets an unmodified MPI-consuming project build against nano-mpi:
+#
+#   cmake -DMPI_C_COMPILER=$(command -v nanompicc) ...
+
+CC="@NANOMPI_W_CC@"
+INC="@NANOMPI_W_INC@"
+LIB="@NANOMPI_W_LIB@"
+LIBS="-lnanompi -lpthread"
+
+case "$1" in
+  -show|-showme|--showme|-compile-info|-link-info|--showme:command)
+      echo "$CC -I$INC -L$LIB $LIBS"; exit 0 ;;
+  -showme:compile)  echo "-I$INC";        exit 0 ;;
+  -showme:link)     echo "-L$LIB $LIBS";  exit 0 ;;
+  -showme:incdirs)  echo "$INC";          exit 0 ;;
+  -showme:libdirs)  echo "$LIB";          exit 0 ;;
+  -showme:libs)     echo "nanompi pthread"; exit 0 ;;
+  -showme:version)  echo "nano-mpi @PROJECT_VERSION@"; exit 0 ;;
+  --version|-v)     echo "nanompicc for nano-mpi @PROJECT_VERSION@"
+                    exec "$CC" --version ;;
+esac
+
+exec "$CC" -I"$INC" "$@" -L"$LIB" $LIBS

@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.cc }} / ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        cc: [gcc, clang]
+        build_type: [Debug, Release]
+        exclude:
+          # macOS gcc is a clang shim; nothing extra is covered
+          - os: macos-latest
+            cc: gcc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_C_COMPILER=${{ matrix.cc }}
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: ${{ matrix.san }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - san: address,undefined
+            name: asan
+          - san: thread
+            name: tsan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_C_FLAGS="-fsanitize=${{ matrix.san }} -fno-omit-frame-pointer -g"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=${{ matrix.san }}"
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        # halt_on_error makes a race a failing test rather than a warning nobody reads
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  # The reason the whole project exists: an unmodified MPI program, built by an
+  # unmodified CMakeLists, must find and use nano-mpi through find_package(MPI).
+  drop-in:
+    name: find_package(MPI) drop-in
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nano-mpi
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX=$HOME/nanompi -DNANOMPI_BUILD_TESTS=OFF
+          cmake --build build -j
+          cmake --install build
+      - name: Build a plain MPI program against it
+        run: |
+          mkdir -p /tmp/plain && cd /tmp/plain
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(plain LANGUAGES C)
+          find_package(MPI REQUIRED)
+          add_executable(prog prog.c)
+          target_link_libraries(prog PRIVATE MPI::MPI_C)
+          EOF
+          cat > prog.c <<'EOF'
+          #include <stdio.h>
+          #include <mpi.h>
+          int main(int argc, char **argv) {
+              int me, np, mine, total;
+              MPI_Init(&argc, &argv);
+              MPI_Comm_rank(MPI_COMM_WORLD, &me);
+              MPI_Comm_size(MPI_COMM_WORLD, &np);
+              mine = me + 1;
+              MPI_Allreduce(&mine, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+              if (me == 0) printf("%d ranks, sum %d\n", np, total);
+              MPI_Finalize();
+              return 0;
+          }
+          EOF
+          cmake -S . -B b -DMPI_C_COMPILER=$HOME/nanompi/bin/nanompicc
+          cmake --build b
+          ./b/prog | tee out.txt
+          grep -q "1 ranks, sum 1" out.txt
+      - name: And through the CMake package
+        run: |
+          mkdir -p /tmp/pkg && cd /tmp/pkg
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(pkg LANGUAGES C)
+          find_package(nanompi REQUIRED)
+          add_executable(prog prog.c)
+          target_link_libraries(prog PRIVATE nanompi::nanompi)
+          EOF
+          cat > prog.c <<'EOF'
+          #include <stdio.h>
+          #include <nanompi.h>
+          static int rank_main(int argc, char **argv, void *u) {
+              int me, np, mine, total;
+              (void) argc; (void) argv; (void) u;
+              MPI_Comm_rank(MPI_COMM_WORLD, &me);
+              MPI_Comm_size(MPI_COMM_WORLD, &np);
+              mine = me + 1;
+              MPI_Allreduce(&mine, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+              if (me == 0) printf("%d ranks, sum %d\n", np, total);
+              return 0;
+          }
+          int main(int argc, char **argv) { return nanompi_run(8, rank_main, argc, argv, NULL); }
+          EOF
+          cmake -S . -B b -Dnanompi_DIR=$HOME/nanompi/lib/cmake/nanompi
+          cmake --build b
+          ./b/prog | tee out.txt
+          grep -q "8 ranks, sum 36" out.txt
