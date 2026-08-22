@@ -1222,7 +1222,8 @@ struct nanompi_team_struct
    int             nfinished;
    int             shutdown;
    int           (*fn)(void *);
-   void           *user;
+   void           *user;       /* argument for the current invoke */
+   void           *argblk;     /* per-rank thread arguments; freed at teardown */
    int             rc;
 };
 
@@ -1281,8 +1282,10 @@ int nanompi_team_create(int nranks, nanompi_team **team_ptr)
    pthread_cond_init(&t->cv_done, NULL);
    t->th = (pthread_t *) malloc(sizeof(pthread_t) * (size_t) nranks);
 
-   /* the arg blocks must outlive create(), so hang them off the team */
+   /* the arg blocks must outlive create(), so hang them off the team -- and
+      off a field of their own, since t->user carries each invoke's argument */
    args = (nmpi_team_arg *) malloc(sizeof(nmpi_team_arg) * (size_t) nranks);
+   t->argblk = args;
    for (i = 0; i < nranks; i++)
    {
       args[i].team = t; args[i].rank = i;
@@ -1364,7 +1367,7 @@ int nanompi_team_start(int nranks, int (*worker)(void *user), void *user,
    t->th = (pthread_t *) calloc((size_t) nranks, sizeof(pthread_t));
 
    args = (nmpi_worker_arg *) calloc((size_t) nranks, sizeof(nmpi_worker_arg));
-   t->user = args;               /* keep them alive until join */
+   t->argblk = args;             /* keep them alive until join */
 
    /* the caller is rank 0 and keeps running the application */
    g_myrank = 0;
@@ -1388,7 +1391,7 @@ int nanompi_team_join(nanompi_team *t)
    int i, rc = 0;
 
    if (!t) { return 0; }
-   args = (nmpi_worker_arg *) t->user;
+   args = (nmpi_worker_arg *) t->argblk;
 
    for (i = 1; i < t->nranks; i++)
    {
@@ -1421,6 +1424,7 @@ int nanompi_team_destroy(nanompi_team *t)
    pthread_mutex_destroy(&t->mtx);
    pthread_cond_destroy(&t->cv_work);
    pthread_cond_destroy(&t->cv_done);
+   free(t->argblk);
    free(t->th);
    free(t);
    universe_free();
