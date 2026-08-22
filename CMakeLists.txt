@@ -13,6 +13,8 @@ option(NANOMPI_BUILD_TESTS    "Build the nano-mpi test suite" ${PROJECT_IS_TOP_L
 option(NANOMPI_BUILD_WRAPPERS "Install nanompicc / nanompiexec compiler wrappers" ON)
 option(NANOMPI_INSTALL        "Install nano-mpi" ${PROJECT_IS_TOP_LEVEL})
 
+# pthreads on POSIX; on Windows the threading primitives come from the OS
+# headers directly (see src/nmpi_port.h) and this resolves to nothing.
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
@@ -36,9 +38,14 @@ set_target_properties(nanompi PROPERTIES
   VERSION   ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}
   POSITION_INDEPENDENT_CODE ON
-  PUBLIC_HEADER "include/mpi.h;include/nanompi.h")
+  PUBLIC_HEADER "include/mpi.h;include/nanompi.h"
+  WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-if (NOT MSVC)
+if (MSVC)
+  target_compile_options(nanompi PRIVATE /W4)
+  # snprintf, getenv and friends are not "unsafe", they are the standard
+  target_compile_definitions(nanompi PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
   target_compile_options(nanompi PRIVATE -Wall -Wextra)
 endif()
 

@@ -9,19 +9,17 @@
  * SPDX-License-Identifier: (Apache-2.0 OR MIT)
  *****************************************************************************/
 
-#include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <limits.h>
-#include <time.h>
-#include <sched.h>
-#include <unistd.h>
+#include <wchar.h>
 
 #include "mpi.h"
 #include "nanompi.h"
+#include "nmpi_port.h"
 
 #if defined(__cplusplus)
 #  define NANOMPI_TLS thread_local
@@ -56,7 +54,7 @@ typedef struct
 } nmpi_dt;
 
 static nmpi_dt         g_dt[NMPI_MAX_TYPES];
-static pthread_mutex_t g_dt_mtx = PTHREAD_MUTEX_INITIALIZER;
+static nmpi_mutex_t g_dt_mtx = NMPI_MUTEX_INIT;
 
 /* The full predefined set of MPI-3 C. Sizes are of the local C types, which is
    the only sensible answer when every rank is a thread of the same process. */
@@ -124,12 +122,12 @@ static size_t dt_size(int dt)
 static int dt_alloc(void)
 {
    int i;
-   pthread_mutex_lock(&g_dt_mtx);
+   nmpi_mutex_lock(&g_dt_mtx);
    for (i = NMPI_FIRST_USER_TYPE; i < NMPI_MAX_TYPES; i++)
    {
-      if (!g_dt[i].used) { g_dt[i].used = 1; pthread_mutex_unlock(&g_dt_mtx); return i; }
+      if (!g_dt[i].used) { g_dt[i].used = 1; nmpi_mutex_unlock(&g_dt_mtx); return i; }
    }
-   pthread_mutex_unlock(&g_dt_mtx);
+   nmpi_mutex_unlock(&g_dt_mtx);
    fprintf(stderr, "nano-mpi: out of datatype handles\n");
    abort();
 }
@@ -212,8 +210,8 @@ typedef struct
    int             *world;   /* comm rank -> world rank */
    int             *inv;     /* world rank -> comm rank (-1 if not a member) */
    /* sense-reversing barrier */
-   pthread_mutex_t  mtx;
-   pthread_cond_t   cv;
+   nmpi_mutex_t  mtx;
+   nmpi_cond_t   cv;
    int              count;
    int              generation;   /* monotonic; never reset, see comm_alloc */
    int              inited;       /* mtx/cv constructed once per slot */
@@ -228,12 +226,12 @@ typedef struct
 } nmpi_comm;
 
 static nmpi_comm       g_comm[NMPI_MAX_COMMS];
-static pthread_mutex_t g_comm_mtx = PTHREAD_MUTEX_INITIALIZER;
+static nmpi_mutex_t g_comm_mtx = NMPI_MUTEX_INIT;
 
 /* Groups: a plain list of world ranks. */
 typedef struct { int used; int size; int *world; } nmpi_group;
 static nmpi_group      g_group[NMPI_MAX_COMMS];
-static pthread_mutex_t g_group_mtx = PTHREAD_MUTEX_INITIALIZER;
+static nmpi_mutex_t g_group_mtx = NMPI_MUTEX_INIT;
 
 static nmpi_group *group_get(MPI_Group g)
 {
@@ -244,18 +242,18 @@ static nmpi_group *group_get(MPI_Group g)
 static int group_alloc(int size, const int *world_ranks)
 {
    int i, h = -1;
-   pthread_mutex_lock(&g_group_mtx);
+   nmpi_mutex_lock(&g_group_mtx);
    for (i = 1; i < NMPI_MAX_COMMS; i++) { if (!g_group[i].used) { h = i; break; } }
    if (h < 0)
    {
-      pthread_mutex_unlock(&g_group_mtx);
+      nmpi_mutex_unlock(&g_group_mtx);
       fprintf(stderr, "nano-mpi: out of group handles\n"); abort();
    }
    g_group[h].used  = 1;
    g_group[h].size  = size;
    g_group[h].world = (int *) malloc(sizeof(int) * (size_t)(size > 0 ? size : 1));
    for (i = 0; i < size; i++) { g_group[h].world[i] = world_ranks[i]; }
-   pthread_mutex_unlock(&g_group_mtx);
+   nmpi_mutex_unlock(&g_group_mtx);
    return h;
 }
 
@@ -265,7 +263,7 @@ typedef void (*nmpi_user_fn)(void *, void *, int *, MPI_Datatype *);
 #define NMPI_MAX_OPS       128
 typedef struct { int used; nmpi_user_fn fn; } nmpi_op;
 static nmpi_op         g_op[NMPI_MAX_OPS];
-static pthread_mutex_t g_op_mtx = PTHREAD_MUTEX_INITIALIZER;
+static nmpi_mutex_t g_op_mtx = NMPI_MUTEX_INIT;
 
 static nmpi_user_fn op_user(int op)
 {
@@ -279,7 +277,7 @@ static void universe_free(void);
 static int             g_universe_up = 0;
 /* the universe was created implicitly for a single thread, not by a team */
 static int             g_auto_universe = 0;
-static pthread_mutex_t g_auto_mtx = PTHREAD_MUTEX_INITIALIZER;
+static nmpi_mutex_t g_auto_mtx = NMPI_MUTEX_INIT;
 static void ensure_universe(void);
 static NANOMPI_TLS int g_myrank = 0;
 
@@ -346,14 +344,14 @@ static int comm_alloc(int size, const int *world_ranks)
    int i, h = -1;
    nmpi_comm *k;
 
-   pthread_mutex_lock(&g_comm_mtx);
+   nmpi_mutex_lock(&g_comm_mtx);
    for (i = 3; i < NMPI_MAX_COMMS; i++)   /* 0 = NULL, 1 = WORLD, 2 = SELF */
    {
       if (!g_comm[i].used) { h = i; break; }
    }
    if (h < 0)
    {
-      pthread_mutex_unlock(&g_comm_mtx);
+      nmpi_mutex_unlock(&g_comm_mtx);
       fprintf(stderr, "nano-mpi: out of communicator handles\n");
       abort();
    }
@@ -370,8 +368,8 @@ static int comm_alloc(int size, const int *world_ranks)
    {
       /* re-initialising a live pthread mutex is undefined, and this slot may be
          one that a previous communicator freed */
-      pthread_mutex_init(&k->mtx, NULL);
-      pthread_cond_init(&k->cv, NULL);
+      nmpi_mutex_init(&k->mtx);
+      nmpi_cond_init(&k->cv);
       k->inited = 1;
    }
    /* generation is deliberately NOT reset. A rank can still be spinning on the
@@ -379,7 +377,7 @@ static int comm_alloc(int size, const int *world_ranks)
       counter guarantees it sees a change and leaves, where a reset to the value
       it captured would leave it spinning forever. */
    k->count = 0;
-   pthread_mutex_unlock(&g_comm_mtx);
+   nmpi_mutex_unlock(&g_comm_mtx);
    return h;
 }
 
@@ -394,41 +392,34 @@ static void comm_barrier(MPI_Comm c)
    if (c == MPI_COMM_SELF || !k || k->size <= 1) { return; }
 
 #ifdef NMPI_LOCK_BARRIER
-   pthread_mutex_lock(&k->mtx);
+   nmpi_mutex_lock(&k->mtx);
    gen = k->generation;
    if (++k->count == k->size)
    {
       k->count = 0;
       k->generation++;
-      pthread_cond_broadcast(&k->cv);
+      nmpi_cond_broadcast(&k->cv);
    }
    else
    {
-      while (gen == k->generation) { pthread_cond_wait(&k->cv, &k->mtx); }
+      while (gen == k->generation) { nmpi_cond_wait(&k->cv, &k->mtx); }
    }
-   pthread_mutex_unlock(&k->mtx);
+   nmpi_mutex_unlock(&k->mtx);
    (void) cnt; (void) spins;
 #else
-   gen = __atomic_load_n(&k->generation, __ATOMIC_ACQUIRE);
-   cnt = __atomic_add_fetch(&k->count, 1, __ATOMIC_ACQ_REL);
+   gen = nmpi_atomic_load_acq(&k->generation);
+   cnt = nmpi_atomic_inc_acqrel(&k->count);
 
    if (cnt == k->size)
    {
-      __atomic_store_n(&k->count, 0, __ATOMIC_RELAXED);
-      __atomic_add_fetch(&k->generation, 1, __ATOMIC_ACQ_REL);
+      nmpi_atomic_store_rel(&k->count, 0);
+      nmpi_atomic_inc_acqrel(&k->generation);
       return;
    }
-   while (__atomic_load_n(&k->generation, __ATOMIC_ACQUIRE) == gen)
+   while (nmpi_atomic_load_acq(&k->generation) == gen)
    {
-      if (++spins < 4096)
-      {
-#if defined(__aarch64__)
-         __asm__ __volatile__("yield" ::: "memory");
-#elif defined(__x86_64__) || defined(__i386__)
-         __builtin_ia32_pause();
-#endif
-      }
-      else { sched_yield(); spins = 4096; }
+      if (++spins < 4096) { nmpi_cpu_relax(); }
+      else { nmpi_yield(); spins = 4096; }
    }
 #endif
 }
@@ -464,8 +455,8 @@ typedef struct nmpi_pending
 
 typedef struct
 {
-   pthread_mutex_t mtx;
-   pthread_cond_t  cv;
+   nmpi_mutex_t mtx;
+   nmpi_cond_t  cv;
    nmpi_msg       *umq_head, *umq_tail;   /* arrived, not yet matched */
    nmpi_pending   *prq_head, *prq_tail;   /* posted, not yet satisfied */
 } nmpi_inbox;
@@ -547,7 +538,7 @@ static void do_send(const void *buf, int count, int dt, int dest, int tag, MPI_C
       straight into its buffer -- no heap allocation, one copy instead of two.
       This is the common pattern: Irecv posted before the matching Isend. */
 #ifndef NMPI_DISABLE_FASTSEND
-   pthread_mutex_lock(&b->mtx);
+   nmpi_mutex_lock(&b->mtx);
    prev = NULL;
    for (p = b->prq_head; p; prev = p, p = p->next)
    {
@@ -558,7 +549,7 @@ static void do_send(const void *buf, int count, int dt, int dest, int tag, MPI_C
          break;
       }
    }
-   pthread_mutex_unlock(&b->mtx);
+   nmpi_mutex_unlock(&b->mtx);
 
    if (p)
    {
@@ -587,10 +578,10 @@ static void do_send(const void *buf, int count, int dt, int dest, int tag, MPI_C
             free(tmp);
          }
       }
-      pthread_mutex_lock(&b->mtx);
+      nmpi_mutex_lock(&b->mtx);
       p->act_src = my_crank; p->act_tag = tag; p->nbytes = nbytes; p->done = 1;
-      pthread_cond_broadcast(&b->cv);
-      pthread_mutex_unlock(&b->mtx);
+      nmpi_cond_broadcast(&b->cv);
+      nmpi_mutex_unlock(&b->mtx);
       return;
    }
 #endif /* NMPI_DISABLE_FASTSEND */
@@ -603,7 +594,7 @@ static void do_send(const void *buf, int count, int dt, int dest, int tag, MPI_C
       m->next = NULL; m->comm = comm; m->src = my_crank; m->tag = tag;
       m->data = data; m->nbytes = nbytes;
 
-      pthread_mutex_lock(&b->mtx);
+      nmpi_mutex_lock(&b->mtx);
       /* re-check: a receive may have been posted while we were packing */
       prev = NULL;
       for (p = b->prq_head; p; prev = p, p = p->next)
@@ -613,16 +604,16 @@ static void do_send(const void *buf, int count, int dt, int dest, int tag, MPI_C
             if (prev) { prev->next = p->next; } else { b->prq_head = p->next; }
             if (b->prq_tail == p) { b->prq_tail = prev; }
             deliver(p, my_crank, tag, m->data, m->nbytes);
-            pthread_cond_broadcast(&b->cv);
-            pthread_mutex_unlock(&b->mtx);
+            nmpi_cond_broadcast(&b->cv);
+            nmpi_mutex_unlock(&b->mtx);
             free(m->data); free(m);
             return;
          }
       }
       if (b->umq_tail) { b->umq_tail->next = m; } else { b->umq_head = m; }
       b->umq_tail = m;
-      pthread_cond_broadcast(&b->cv);
-      pthread_mutex_unlock(&b->mtx);
+      nmpi_cond_broadcast(&b->cv);
+      nmpi_mutex_unlock(&b->mtx);
    }
 }
 
@@ -639,7 +630,7 @@ static nmpi_pending *post_recv(void *buf, int count, int dt, int src, int tag,
    p->buf = buf; p->count = count; p->dt = dt;
    p->done = 0; p->act_src = 0; p->act_tag = 0; p->nbytes = 0;
 
-   pthread_mutex_lock(&b->mtx);
+   nmpi_mutex_lock(&b->mtx);
    prev = NULL;
    for (m = b->umq_head; m; prev = m, m = m->next)
    {
@@ -648,14 +639,14 @@ static nmpi_pending *post_recv(void *buf, int count, int dt, int src, int tag,
          if (prev) { prev->next = m->next; } else { b->umq_head = m->next; }
          if (b->umq_tail == m) { b->umq_tail = prev; }
          deliver(p, m->src, m->tag, m->data, m->nbytes);
-         pthread_mutex_unlock(&b->mtx);
+         nmpi_mutex_unlock(&b->mtx);
          free(m->data); free(m);
          return p;
       }
    }
    if (b->prq_tail) { b->prq_tail->next = p; } else { b->prq_head = p; }
    b->prq_tail = p;
-   pthread_mutex_unlock(&b->mtx);
+   nmpi_mutex_unlock(&b->mtx);
    return p;
 }
 
@@ -664,9 +655,9 @@ static void wait_pending(nmpi_pending *p, MPI_Status *status)
    nmpi_inbox *b = &g_inbox[g_myrank];
 
    SET_STATE(NMPI_ST_RECV, p->comm, p->src, p->tag);
-   pthread_mutex_lock(&b->mtx);
-   while (!p->done) { pthread_cond_wait(&b->cv, &b->mtx); }
-   pthread_mutex_unlock(&b->mtx);
+   nmpi_mutex_lock(&b->mtx);
+   while (!p->done) { nmpi_cond_wait(&b->cv, &b->mtx); }
+   nmpi_mutex_unlock(&b->mtx);
    SET_STATE(NMPI_ST_RUN, 0, 0, 0);
 
    if (status)
@@ -690,7 +681,7 @@ static nmpi_msg *probe_umq(int comm, int src, int tag, int blocking, MPI_Status 
    nmpi_inbox *b = &g_inbox[g_myrank];
    nmpi_msg *m;
 
-   pthread_mutex_lock(&b->mtx);
+   nmpi_mutex_lock(&b->mtx);
    for (;;)
    {
       for (m = b->umq_head; m; m = m->next)
@@ -703,13 +694,13 @@ static nmpi_msg *probe_umq(int comm, int src, int tag, int blocking, MPI_Status 
                status->MPI_TAG    = m->tag;
                status->nanompi_count  = (int) m->nbytes;
             }
-            pthread_mutex_unlock(&b->mtx);
+            nmpi_mutex_unlock(&b->mtx);
             return m;
          }
       }
-      if (!blocking) { pthread_mutex_unlock(&b->mtx); return NULL; }
+      if (!blocking) { nmpi_mutex_unlock(&b->mtx); return NULL; }
       SET_STATE(NMPI_ST_PROBE, comm, src, tag);
-      pthread_cond_wait(&b->cv, &b->mtx);
+      nmpi_cond_wait(&b->cv, &b->mtx);
    }
 }
 
@@ -984,8 +975,7 @@ static void *nmpi_watchdog(void *v)
 
    for (t = 0; ; t++)
    {
-      struct timespec ts; ts.tv_sec = 1; ts.tv_nsec = 0;
-      nanosleep(&ts, NULL);
+      nmpi_sleep_ms(1000);
       {
          int stuck = 1;
          for (i = 0; i < g_nranks; i++)
@@ -1038,13 +1028,7 @@ int nanompi_default_ranks(void)
       fprintf(stderr, "nano-mpi: ignoring invalid NANOMPI_NUM_RANKS=\"%s\" "
                       "(want a positive integer)\n", e);
    }
-#if defined(_SC_NPROCESSORS_ONLN)
-   {
-      long n = sysconf(_SC_NPROCESSORS_ONLN);
-      if (n >= 1) { return (int) n; }
-   }
-#endif
-   return 1;
+   return nmpi_cpu_count();
 }
 
 /*--------------------------------------------------------------------------
@@ -1059,23 +1043,23 @@ int nanompi_default_ranks(void)
    one-rank world is a permanent allocation and a leak checker says so. */
 static void free_auto_universe(void)
 {
-   pthread_mutex_lock(&g_auto_mtx);
+   nmpi_mutex_lock(&g_auto_mtx);
    if (g_auto_universe) { universe_free(); g_auto_universe = 0; }
-   pthread_mutex_unlock(&g_auto_mtx);
+   nmpi_mutex_unlock(&g_auto_mtx);
 }
 
 static void ensure_universe(void)
 {
    static int registered = 0;   /* atexit slots are finite; take one, once */
 
-   pthread_mutex_lock(&g_auto_mtx);
+   nmpi_mutex_lock(&g_auto_mtx);
    if (!g_universe_up)
    {
       universe_init(1);
       g_auto_universe = 1;
       if (!registered) { atexit(free_auto_universe); registered = 1; }
    }
-   pthread_mutex_unlock(&g_auto_mtx);
+   nmpi_mutex_unlock(&g_auto_mtx);
 }
 
 /* A real team supersedes the implicit world: drop it so nranks can grow. */
@@ -1104,8 +1088,8 @@ static int universe_init(int nranks)
    g_reqs  = (nmpi_req **) calloc((size_t) nranks, sizeof(nmpi_req *));
    for (i = 0; i < nranks; i++)
    {
-      pthread_mutex_init(&g_inbox[i].mtx, NULL);
-      pthread_cond_init(&g_inbox[i].cv, NULL);
+      nmpi_mutex_init(&g_inbox[i].mtx);
+      nmpi_cond_init(&g_inbox[i].cv);
       g_reqs[i] = (nmpi_req *) calloc(NMPI_REQS_PER_RANK, sizeof(nmpi_req));
    }
 
@@ -1123,8 +1107,8 @@ static int universe_init(int nranks)
       for (i = 0; i < nranks; i++) { k->inv[i] = i; }
       if (!k->inited)
       {
-         pthread_mutex_init(&k->mtx, NULL);
-         pthread_cond_init(&k->cv, NULL);
+         nmpi_mutex_init(&k->mtx);
+         nmpi_cond_init(&k->cv);
          k->inited = 1;
       }
       k->count = 0;   /* generation stays monotonic; see comm_alloc */
@@ -1137,10 +1121,10 @@ static int universe_init(int nranks)
       const char *wd = getenv("NANOMPI_WATCHDOG");
       if (wd && atoi(wd) > 0)
       {
-         static int secs; pthread_t wt;
+         static int secs; nmpi_thread_t wt;
          secs = atoi(wd);
-         pthread_create(&wt, NULL, nmpi_watchdog, &secs);
-         pthread_detach(wt);
+         nmpi_thread_create(&wt, nmpi_watchdog, &secs);
+         nmpi_thread_detach(wt);
       }
    }
    g_universe_up = 1;
@@ -1169,7 +1153,7 @@ static void universe_free(void)
 int nanompi_run(int nranks, int (*fn)(int, char **, void *),
                    int argc, char **argv, void *user)
 {
-   pthread_t       *th;
+   nmpi_thread_t       *th;
    nmpi_thread_arg *args;
    int i, rc = 0;
 
@@ -1179,19 +1163,19 @@ int nanompi_run(int nranks, int (*fn)(int, char **, void *),
    drop_auto_universe();
    if (universe_init(nranks)) { return 1; }
 
-   th   = (pthread_t *) malloc(sizeof(pthread_t) * (size_t) nranks);
+   th   = (nmpi_thread_t *) malloc(sizeof(nmpi_thread_t) * (size_t) nranks);
    args = (nmpi_thread_arg *) malloc(sizeof(nmpi_thread_arg) * (size_t) nranks);
    for (i = 0; i < nranks; i++)
    {
       args[i].rank = i; args[i].fn = fn; args[i].argc = argc;
       args[i].argv = argv; args[i].user = user; args[i].ret = 0;
-      if (pthread_create(&th[i], NULL, nmpi_trampoline, &args[i]) != 0)
+      if (nmpi_thread_create(&th[i], nmpi_trampoline, &args[i]) != 0)
       {
-         fprintf(stderr, "nano-mpi: pthread_create failed for rank %d\n", i);
+         fprintf(stderr, "nano-mpi: could not create a thread for rank %d\n", i);
          return 1;
       }
    }
-   for (i = 0; i < nranks; i++) { pthread_join(th[i], NULL); if (args[i].ret) { rc = args[i].ret; } }
+   for (i = 0; i < nranks; i++) { nmpi_thread_join(th[i]); if (args[i].ret) { rc = args[i].ret; } }
 
    free(th); free(args);
    universe_free();
@@ -1213,11 +1197,11 @@ int nanompi_run(int nranks, int (*fn)(int, char **, void *),
  *--------------------------------------------------------------------------*/
 struct nanompi_team_struct
 {
-   pthread_t      *th;
+   nmpi_thread_t      *th;
    int             nranks;
-   pthread_mutex_t mtx;
-   pthread_cond_t  cv_work;    /* ranks wait here for the next call */
-   pthread_cond_t  cv_done;    /* the caller waits here for completion */
+   nmpi_mutex_t mtx;
+   nmpi_cond_t  cv_work;    /* ranks wait here for the next call */
+   nmpi_cond_t  cv_done;    /* the caller waits here for completion */
    int             generation; /* bumped once per invoke */
    int             nfinished;
    int             shutdown;
@@ -1241,22 +1225,22 @@ static void *nmpi_team_worker(void *v)
    {
       int (*fn)(void *); void *user; int rc;
 
-      pthread_mutex_lock(&t->mtx);
+      nmpi_mutex_lock(&t->mtx);
       while (!t->shutdown && t->generation == seen)
       {
-         pthread_cond_wait(&t->cv_work, &t->mtx);
+         nmpi_cond_wait(&t->cv_work, &t->mtx);
       }
-      if (t->shutdown) { pthread_mutex_unlock(&t->mtx); break; }
+      if (t->shutdown) { nmpi_mutex_unlock(&t->mtx); break; }
       seen = t->generation;
       fn = t->fn; user = t->user;
-      pthread_mutex_unlock(&t->mtx);
+      nmpi_mutex_unlock(&t->mtx);
 
       rc = fn ? fn(user) : 0;
 
-      pthread_mutex_lock(&t->mtx);
+      nmpi_mutex_lock(&t->mtx);
       if (rc && !t->rc) { t->rc = rc; }
-      if (++t->nfinished == t->nranks) { pthread_cond_broadcast(&t->cv_done); }
-      pthread_mutex_unlock(&t->mtx);
+      if (++t->nfinished == t->nranks) { nmpi_cond_broadcast(&t->cv_done); }
+      nmpi_mutex_unlock(&t->mtx);
    }
    return NULL;
 }
@@ -1277,10 +1261,10 @@ int nanompi_team_create(int nranks, nanompi_team **team_ptr)
 
    t = (nanompi_team *) calloc(1, sizeof(nanompi_team));
    t->nranks = nranks;
-   pthread_mutex_init(&t->mtx, NULL);
-   pthread_cond_init(&t->cv_work, NULL);
-   pthread_cond_init(&t->cv_done, NULL);
-   t->th = (pthread_t *) malloc(sizeof(pthread_t) * (size_t) nranks);
+   nmpi_mutex_init(&t->mtx);
+   nmpi_cond_init(&t->cv_work);
+   nmpi_cond_init(&t->cv_done);
+   t->th = (nmpi_thread_t *) malloc(sizeof(nmpi_thread_t) * (size_t) nranks);
 
    /* the arg blocks must outlive create(), so hang them off the team -- and
       off a field of their own, since t->user carries each invoke's argument */
@@ -1289,9 +1273,9 @@ int nanompi_team_create(int nranks, nanompi_team **team_ptr)
    for (i = 0; i < nranks; i++)
    {
       args[i].team = t; args[i].rank = i;
-      if (pthread_create(&t->th[i], NULL, nmpi_team_worker, &args[i]) != 0)
+      if (nmpi_thread_create(&t->th[i], nmpi_team_worker, &args[i]) != 0)
       {
-         fprintf(stderr, "nano-mpi: pthread_create failed for rank %d\n", i);
+         fprintf(stderr, "nano-mpi: could not create a thread for rank %d\n", i);
          return 1;
       }
    }
@@ -1308,13 +1292,13 @@ int nanompi_team_invoke(nanompi_team *t, int (*fn)(void *user), void *user)
 
    if (!t || !fn) { return 1; }
 
-   pthread_mutex_lock(&t->mtx);
+   nmpi_mutex_lock(&t->mtx);
    t->fn = fn; t->user = user; t->rc = 0; t->nfinished = 0;
    t->generation++;
-   pthread_cond_broadcast(&t->cv_work);
-   while (t->nfinished < t->nranks) { pthread_cond_wait(&t->cv_done, &t->mtx); }
+   nmpi_cond_broadcast(&t->cv_work);
+   while (t->nfinished < t->nranks) { nmpi_cond_wait(&t->cv_done, &t->mtx); }
    rc = t->rc;
-   pthread_mutex_unlock(&t->mtx);
+   nmpi_mutex_unlock(&t->mtx);
 
    return rc;
 }
@@ -1361,10 +1345,10 @@ int nanompi_team_start(int nranks, int (*worker)(void *user), void *user,
 
    t = (nanompi_team *) calloc(1, sizeof(nanompi_team));
    t->nranks = nranks;
-   pthread_mutex_init(&t->mtx, NULL);
-   pthread_cond_init(&t->cv_work, NULL);
-   pthread_cond_init(&t->cv_done, NULL);
-   t->th = (pthread_t *) calloc((size_t) nranks, sizeof(pthread_t));
+   nmpi_mutex_init(&t->mtx);
+   nmpi_cond_init(&t->cv_work);
+   nmpi_cond_init(&t->cv_done);
+   t->th = (nmpi_thread_t *) calloc((size_t) nranks, sizeof(nmpi_thread_t));
 
    args = (nmpi_worker_arg *) calloc((size_t) nranks, sizeof(nmpi_worker_arg));
    t->argblk = args;             /* keep them alive until join */
@@ -1375,9 +1359,9 @@ int nanompi_team_start(int nranks, int (*worker)(void *user), void *user,
    for (i = 1; i < nranks; i++)
    {
       args[i].team = t; args[i].rank = i; args[i].fn = worker; args[i].user = user;
-      if (pthread_create(&t->th[i], NULL, nmpi_worker_entry, &args[i]) != 0)
+      if (nmpi_thread_create(&t->th[i], nmpi_worker_entry, &args[i]) != 0)
       {
-         fprintf(stderr, "nano-mpi: pthread_create failed for rank %d\n", i);
+         fprintf(stderr, "nano-mpi: could not create a thread for rank %d\n", i);
          return 1;
       }
    }
@@ -1395,13 +1379,13 @@ int nanompi_team_join(nanompi_team *t)
 
    for (i = 1; i < t->nranks; i++)
    {
-      pthread_join(t->th[i], NULL);
+      nmpi_thread_join(t->th[i]);
       if (args && args[i].ret && !rc) { rc = args[i].ret; }
    }
 
-   pthread_mutex_destroy(&t->mtx);
-   pthread_cond_destroy(&t->cv_work);
-   pthread_cond_destroy(&t->cv_done);
+   nmpi_mutex_destroy(&t->mtx);
+   nmpi_cond_destroy(&t->cv_work);
+   nmpi_cond_destroy(&t->cv_done);
    free(args);
    free(t->th);
    free(t);
@@ -1414,16 +1398,16 @@ int nanompi_team_destroy(nanompi_team *t)
    int i;
    if (!t) { return 0; }
 
-   pthread_mutex_lock(&t->mtx);
+   nmpi_mutex_lock(&t->mtx);
    t->shutdown = 1;
-   pthread_cond_broadcast(&t->cv_work);
-   pthread_mutex_unlock(&t->mtx);
+   nmpi_cond_broadcast(&t->cv_work);
+   nmpi_mutex_unlock(&t->mtx);
 
-   for (i = 0; i < t->nranks; i++) { pthread_join(t->th[i], NULL); }
+   for (i = 0; i < t->nranks; i++) { nmpi_thread_join(t->th[i]); }
 
-   pthread_mutex_destroy(&t->mtx);
-   pthread_cond_destroy(&t->cv_work);
-   pthread_cond_destroy(&t->cv_done);
+   nmpi_mutex_destroy(&t->mtx);
+   nmpi_cond_destroy(&t->cv_work);
+   nmpi_cond_destroy(&t->cv_done);
    free(t->argblk);
    free(t->th);
    free(t);
@@ -1500,8 +1484,10 @@ int MPI_Get_processor_name( char *name, int *resultlen )
 {
    char host[128];
    int n;
-   if (gethostname(host, sizeof host) != 0) { strcpy(host, "localhost"); }
+   host[0] = 0;
+   nmpi_hostname(host, sizeof host);
    host[sizeof host - 1] = 0;
+   if (!host[0]) { memcpy(host, "localhost", sizeof "localhost"); }
    n = snprintf(name, MPI_MAX_PROCESSOR_NAME, "%s:rank%d", host, g_myrank);
    if (resultlen) { *resultlen = (n < 0) ? 0 : n; }
    return MPI_SUCCESS;
@@ -1543,14 +1529,8 @@ int MPI_Abort( MPI_Comm comm, int errorcode )
    return 0;
 }
 
-double MPI_Wtime( void )
-{
-   struct timespec ts;
-   clock_gettime(CLOCK_MONOTONIC, &ts);
-   return (double) ts.tv_sec + 1.0e-9 * (double) ts.tv_nsec;
-}
-
-double MPI_Wtick( void ) { return 1.0e-9; }
+double MPI_Wtime( void ) { return nmpi_wtime(); }
+double MPI_Wtick( void ) { return nmpi_wtick(); }
 
 int MPI_Barrier( MPI_Comm comm ) { comm_barrier(comm); return 0; }
 
@@ -1628,11 +1608,11 @@ int MPI_Comm_free( MPI_Comm *comm )
       comm_barrier(*comm);
       if (me == 0)
       {
-         pthread_mutex_lock(&g_comm_mtx);
+         nmpi_mutex_lock(&g_comm_mtx);
          free(k->world); free(k->inv); free((void *) k->ptr); free(k->len);
          k->world = NULL; k->inv = NULL; k->ptr = NULL; k->len = NULL;
          k->used = 0;
-         pthread_mutex_unlock(&g_comm_mtx);
+         nmpi_mutex_unlock(&g_comm_mtx);
       }
    }
    *comm = MPI_COMM_NULL;
@@ -1699,9 +1679,9 @@ int MPI_Group_free( MPI_Group *group )
    nmpi_group *g = group_get(*group);
    if (g)
    {
-      pthread_mutex_lock(&g_group_mtx);
+      nmpi_mutex_lock(&g_group_mtx);
       free(g->world); g->world = NULL; g->used = 0;
-      pthread_mutex_unlock(&g_group_mtx);
+      nmpi_mutex_unlock(&g_group_mtx);
    }
    return 0;
 }
@@ -2371,9 +2351,9 @@ int MPI_Test( MPI_Request *request, int *flag, MPI_Status *status )
    if (r->kind == 4 && !r->active) { *flag = 1; return 0; }
 
    b = &g_inbox[g_myrank];
-   pthread_mutex_lock(&b->mtx);
+   nmpi_mutex_lock(&b->mtx);
    done = r->p->done;
-   pthread_mutex_unlock(&b->mtx);
+   nmpi_mutex_unlock(&b->mtx);
 
    if (done) { MPI_Wait(request, status); *flag = 1; }
    else { *flag = 0; }
@@ -2558,10 +2538,10 @@ int MPI_Type_free( MPI_Datatype *datatype )
    nmpi_dt *d = dt_get(*datatype);
    if (d)
    {
-      pthread_mutex_lock(&g_dt_mtx);
+      nmpi_mutex_lock(&g_dt_mtx);
       free(d->len); free(d->disp);
       d->len = NULL; d->disp = NULL; d->used = 0;
-      pthread_mutex_unlock(&g_dt_mtx);
+      nmpi_mutex_unlock(&g_dt_mtx);
    }
    return 0;
 }
@@ -2570,9 +2550,9 @@ int MPI_Op_free( MPI_Op *op )
 {
    if (*op >= NMPI_FIRST_USER_OP && *op < NMPI_MAX_OPS)
    {
-      pthread_mutex_lock(&g_op_mtx);
+      nmpi_mutex_lock(&g_op_mtx);
       g_op[*op].used = 0; g_op[*op].fn = NULL;
-      pthread_mutex_unlock(&g_op_mtx);
+      nmpi_mutex_unlock(&g_op_mtx);
    }
    return 0;
 }
@@ -2582,12 +2562,12 @@ int MPI_Op_create( MPI_User_function *function, int commute,
 {
    int i, h = -1;
    NANOMPI_UNUSED(commute);
-   pthread_mutex_lock(&g_op_mtx);
+   nmpi_mutex_lock(&g_op_mtx);
    for (i = NMPI_FIRST_USER_OP; i < NMPI_MAX_OPS; i++)
    {
       if (!g_op[i].used) { h = i; g_op[i].used = 1; g_op[i].fn = (nmpi_user_fn) function; break; }
    }
-   pthread_mutex_unlock(&g_op_mtx);
+   nmpi_mutex_unlock(&g_op_mtx);
    if (h < 0) { fprintf(stderr, "nano-mpi: out of op handles\n"); abort(); }
    *op = (MPI_Op) h;
    return 0;
@@ -2620,7 +2600,7 @@ typedef struct
 } nmpi_win;
 
 static nmpi_win        g_win[NMPI_MAX_WINS];
-static pthread_mutex_t g_win_mtx = PTHREAD_MUTEX_INITIALIZER;
+static nmpi_mutex_t g_win_mtx = NMPI_MUTEX_INIT;
 
 static nmpi_win *win_get(MPI_Win w)
 {
@@ -2630,19 +2610,19 @@ static nmpi_win *win_get(MPI_Win w)
       the same time, so the used flag has to be read under the lock that sets
       it. The window's contents need no lock: MPI_Win_free is collective, so no
       rank of the owning communicator can still be using one. */
-   pthread_mutex_lock(&g_win_mtx);
+   nmpi_mutex_lock(&g_win_mtx);
    live = g_win[w].used;
-   pthread_mutex_unlock(&g_win_mtx);
+   nmpi_mutex_unlock(&g_win_mtx);
    return live ? &g_win[w] : NULL;
 }
 
 static int win_alloc(void)
 {
    int i, h = -1;
-   pthread_mutex_lock(&g_win_mtx);
+   nmpi_mutex_lock(&g_win_mtx);
    for (i = 1; i < NMPI_MAX_WINS; i++) { if (!g_win[i].used) { h = i; break; } }
    if (h >= 0) { g_win[h].used = 1; }
-   pthread_mutex_unlock(&g_win_mtx);
+   nmpi_mutex_unlock(&g_win_mtx);
    if (h < 0) { fprintf(stderr, "nano-mpi: out of window handles\n"); abort(); }
    return h;
 }
@@ -2751,11 +2731,11 @@ int MPI_Win_free( MPI_Win *win )
    comm_barrier(comm);             /* nobody may still be reading the block */
    if (me == owner)
    {
-      pthread_mutex_lock(&g_win_mtx);
+      nmpi_mutex_lock(&g_win_mtx);
       free(w->base); free(w->off); free(w->len); free(w->disp);
       w->base = NULL; w->off = NULL; w->len = NULL; w->disp = NULL;
       w->used = 0;
-      pthread_mutex_unlock(&g_win_mtx);
+      nmpi_mutex_unlock(&g_win_mtx);
    }
    *win = MPI_WIN_NULL;
    return MPI_SUCCESS;
@@ -2769,7 +2749,7 @@ int MPI_Win_fence( int assert_, MPI_Win win )
    nmpi_win *w = win_get(win);
    NANOMPI_UNUSED(assert_);
    if (!w) { return MPI_ERR_ARG; }
-   __atomic_thread_fence(__ATOMIC_SEQ_CST);
+   nmpi_atomic_fence();
    comm_barrier(w->comm);
    return MPI_SUCCESS;
 }
@@ -2777,7 +2757,7 @@ int MPI_Win_fence( int assert_, MPI_Win win )
 int MPI_Win_sync( MPI_Win win )
 {
    if (!win_get(win)) { return MPI_ERR_ARG; }
-   __atomic_thread_fence(__ATOMIC_SEQ_CST);
+   nmpi_atomic_fence();
    return MPI_SUCCESS;
 }
 

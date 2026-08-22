@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -12,29 +13,43 @@ concurrency:
 
 jobs:
   build:
-    name: ${{ matrix.os }} / ${{ matrix.cc }} / ${{ matrix.build_type }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.platform.name }} / ${{ matrix.build_type }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        cc: [gcc, clang]
         build_type: [Debug, Release]
-        exclude:
-          # macOS gcc is a clang shim; nothing extra is covered
-          - os: macos-latest
-            cc: gcc
+        platform:
+          - { os: ubuntu-latest,    name: "Linux x86-64 gcc",   cc: gcc }
+          - { os: ubuntu-latest,    name: "Linux x86-64 clang", cc: clang }
+          - { os: ubuntu-24.04-arm, name: "Linux arm64 gcc",    cc: gcc }
+          - { os: ubuntu-24.04-arm, name: "Linux arm64 clang",  cc: clang }
+          - { os: macos-latest,     name: "macOS arm64 clang",  cc: clang }
+          - { os: macos-13,         name: "macOS x86-64 clang", cc: clang }
+          - { os: windows-latest,   name: "Windows x64 MSVC",   cc: "" }
     steps:
       - uses: actions/checkout@v4
+
+      # Windows takes MSVC as CMake finds it; everywhere else the compiler is
+      # part of what the job is testing.
+      - name: Configure (MSVC)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -A x64
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_C_COMPILER=${{ matrix.cc }}
+        if: runner.os != 'Windows'
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_C_COMPILER=${{ matrix.platform.cc }}
+
       - name: Build
-        run: cmake --build build -j
+        run: cmake --build build --config ${{ matrix.build_type }} -j
+
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --build-config ${{ matrix.build_type }} --output-on-failure
 
   sanitizers:
-    name: ${{ matrix.san }}
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
