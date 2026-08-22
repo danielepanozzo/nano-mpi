@@ -2624,8 +2624,16 @@ static pthread_mutex_t g_win_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static nmpi_win *win_get(MPI_Win w)
 {
-   if (w <= 0 || w >= NMPI_MAX_WINS || !g_win[w].used) { return NULL; }
-   return &g_win[w];
+   int live;
+   if (w <= 0 || w >= NMPI_MAX_WINS) { return NULL; }
+   /* The table is process-wide, and disjoint communicators allocate from it at
+      the same time, so the used flag has to be read under the lock that sets
+      it. The window's contents need no lock: MPI_Win_free is collective, so no
+      rank of the owning communicator can still be using one. */
+   pthread_mutex_lock(&g_win_mtx);
+   live = g_win[w].used;
+   pthread_mutex_unlock(&g_win_mtx);
+   return live ? &g_win[w] : NULL;
 }
 
 static int win_alloc(void)
@@ -2725,15 +2733,23 @@ int MPI_Win_shared_query( MPI_Win win, int rank, MPI_Aint *size,
 int MPI_Win_free( MPI_Win *win )
 {
    nmpi_win *w;
-   int me;
+   MPI_Comm comm;
+   int me, owner;
 
    if (!win) { return MPI_ERR_ARG; }
    w = win_get(*win);
    if (!w) { *win = MPI_WIN_NULL; return MPI_SUCCESS; }
 
-   me = comm_rank_of(w->comm);
-   comm_barrier(w->comm);          /* nobody may still be reading the block */
-   if (me == w->owner)
+   /* Take what we still need out of the slot before giving it up. Releasing it
+      lets another communicator claim and overwrite it immediately, so reading
+      w->comm afterwards -- to barrier on -- would be reading someone else's
+      window. */
+   comm  = w->comm;
+   owner = w->owner;
+   me    = comm_rank_of(comm);
+
+   comm_barrier(comm);             /* nobody may still be reading the block */
+   if (me == owner)
    {
       pthread_mutex_lock(&g_win_mtx);
       free(w->base); free(w->off); free(w->len); free(w->disp);
@@ -2741,7 +2757,6 @@ int MPI_Win_free( MPI_Win *win )
       w->used = 0;
       pthread_mutex_unlock(&g_win_mtx);
    }
-   comm_barrier(w->comm);          /* and nobody may free it twice */
    *win = MPI_WIN_NULL;
    return MPI_SUCCESS;
 }
