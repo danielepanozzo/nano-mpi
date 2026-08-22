@@ -174,7 +174,10 @@ race in your own code, building against a sanitized nano-mpi is a good idea.
 wildcards, `MPI_PROC_NULL`), the twelve common collectives with `MPI_IN_PLACE`,
 communicators and groups, derived datatypes, the full predefined datatype set of
 MPI-3 C, all the predefined reduction operators including `MPI_MAXLOC` /
-`MPI_MINLOC`, user-defined operators, and **shared-memory windows**.
+`MPI_MINLOC`, user-defined operators, and **shared-memory windows**. The
+`MPI_CXX_BOOL` and `MPI_CXX_*_COMPLEX` datatypes are there too — those are
+datatypes in the standard, not part of the C++ bindings MPI-3 removed, and real
+code asks for them (AMGCL does).
 
 Shared windows are the one part of MPI's one-sided chapter that is trivially
 true here: ranks are threads, so `MPI_Win_allocate_shared` is a real allocation

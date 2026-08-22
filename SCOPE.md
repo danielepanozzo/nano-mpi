@@ -54,7 +54,9 @@ Present and intended to work:
 
 That is **92 entry points**. The full predefined datatype set of MPI-3 C is
 present, including the fixed-width `MPI_INT8_T` … `MPI_UINT64_T`, `MPI_C_BOOL`,
-the complex types, and the `MPI_FLOAT_INT`-style pair types.
+the complex types, and the `MPI_FLOAT_INT`-style pair types — plus `MPI_CXX_BOOL`
+and the `MPI_CXX_*_COMPLEX` types, which are datatypes in the standard rather
+than part of the C++ bindings MPI-3 removed.
 
 ### MPI_IN_PLACE
 

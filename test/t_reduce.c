@@ -121,6 +121,23 @@ static int rank_main(int argc, char **argv, void *user)
       CHECK_DBL(got[1], wi, 1e-9);
    }
 
+   /* the MPI_CXX_* complex types behave like their C counterparts */
+   {
+      float s[2], got[2] = { -1.0f, -1.0f };
+      double wr = 0.0;
+      int i;
+      s[0] = (float)(g_me + 1); s[1] = 0.0f;
+      for (i = 0; i < g_np; i++) { wr += i + 1.0; }
+      MPI_Allreduce(s, got, 1, MPI_CXX_FLOAT_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+      CHECK_DBL((double) got[0], wr, 1e-4 * (wr + 1.0));
+      CHECK_DBL((double) got[1], 0.0, 1e-6);
+   }
+   {
+      bool s = (g_me == 0), got = false;
+      MPI_Allreduce(&s, &got, 1, MPI_CXX_BOOL, MPI_LOR, MPI_COMM_WORLD);
+      CHECK_INT((int) got, 1);
+   }
+
    /* MAXLOC / MINLOC, including the smaller-index tie-break */
    {
       MPI_Double_int s, got;

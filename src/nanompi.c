@@ -38,7 +38,7 @@
 #define NMPI_MAX_COMMS   4096
 #define NMPI_MAX_TYPES   4096
 #define NMPI_REQS_PER_RANK 65536
-#define NMPI_FIRST_USER_TYPE 64   /* predefined datatypes occupy 1..38 */
+#define NMPI_FIRST_USER_TYPE 64   /* predefined datatypes occupy 1..42 */
 
 /*--------------------------------------------------------------------------
  * Datatypes
@@ -100,6 +100,10 @@ static size_t predefined_size(int dt)
       case MPI_SHORT_INT:              return sizeof(MPI_Short_int);
       case MPI_2INT:                   return sizeof(MPI_2int);
       case MPI_LONG_DOUBLE_INT:        return sizeof(MPI_Long_double_int);
+      case MPI_CXX_BOOL:               return sizeof(bool);
+      case MPI_CXX_FLOAT_COMPLEX:      return 2 * sizeof(float);
+      case MPI_CXX_DOUBLE_COMPLEX:     return 2 * sizeof(double);
+      case MPI_CXX_LONG_DOUBLE_COMPLEX: return 2 * sizeof(long double);
       default:                         return 0;
    }
 }
@@ -840,6 +844,7 @@ static void reduce_into(void *dst, const void *src, int count, int dt, int op)
       case MPI_LONG_LONG_INT:         NMPI_REDUCE_INT(long long);          break;
       case MPI_UNSIGNED_LONG_LONG:    NMPI_REDUCE_INT(unsigned long long); break;
       case MPI_C_BOOL:                NMPI_REDUCE_INT(bool);               break;
+      case MPI_CXX_BOOL:              NMPI_REDUCE_INT(bool);               break;
       case MPI_INT8_T:                NMPI_REDUCE_INT(int8_t);             break;
       case MPI_INT16_T:               NMPI_REDUCE_INT(int16_t);            break;
       case MPI_INT32_T:               NMPI_REDUCE_INT(int32_t);            break;
@@ -859,6 +864,10 @@ static void reduce_into(void *dst, const void *src, int count, int dt, int op)
       case MPI_C_FLOAT_COMPLEX:       NMPI_REDUCE_CPLX(float);             break;
       case MPI_C_DOUBLE_COMPLEX:      NMPI_REDUCE_CPLX(double);            break;
       case MPI_C_LONG_DOUBLE_COMPLEX: NMPI_REDUCE_CPLX(long double);       break;
+
+      case MPI_CXX_FLOAT_COMPLEX:       NMPI_REDUCE_CPLX(float);           break;
+      case MPI_CXX_DOUBLE_COMPLEX:      NMPI_REDUCE_CPLX(double);          break;
+      case MPI_CXX_LONG_DOUBLE_COMPLEX: NMPI_REDUCE_CPLX(long double);     break;
 
       case MPI_FLOAT_INT:             NMPI_REDUCE_LOC(MPI_Float_int);      break;
       case MPI_DOUBLE_INT:            NMPI_REDUCE_LOC(MPI_Double_int);     break;

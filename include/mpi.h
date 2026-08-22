@@ -129,6 +129,13 @@ typedef int (MPI_Delete_function)(MPI_Comm, int, void *, void *);
 #define MPI_SHORT_INT             36
 #define MPI_2INT                  37
 #define MPI_LONG_DOUBLE_INT       38
+/* The C++ types. These are datatypes in the standard, not part of the C++
+   bindings that MPI-3 removed: they name bool and std::complex<T>, whose
+   layouts here are those of the corresponding C types. */
+#define MPI_CXX_BOOL                39
+#define MPI_CXX_FLOAT_COMPLEX       40
+#define MPI_CXX_DOUBLE_COMPLEX      41
+#define MPI_CXX_LONG_DOUBLE_COMPLEX 42
 
 /* struct layouts the pair types above describe */
 typedef struct { float       value; int index; } MPI_Float_int;

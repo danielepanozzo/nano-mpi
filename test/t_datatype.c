@@ -1,5 +1,6 @@
 /* Derived datatypes, sizes and addresses. */
 #include "harness.h"
+#include <stdbool.h>
 
 typedef struct { int   id; double x[3]; char tag; } particle;
 
@@ -24,6 +25,10 @@ static int rank_main(int argc, char **argv, void *user)
    CHECK_INT(sz, 2 * (int) sizeof(double));
    MPI_Type_size(MPI_DOUBLE_INT, &sz);
    CHECK_INT(sz, (int) sizeof(MPI_Double_int));
+   /* the C++ types are datatypes in the standard, not removed bindings */
+   MPI_Type_size(MPI_CXX_BOOL, &sz);            CHECK_INT(sz, (int) sizeof(bool));
+   MPI_Type_size(MPI_CXX_FLOAT_COMPLEX, &sz);   CHECK_INT(sz, 2 * (int) sizeof(float));
+   MPI_Type_size(MPI_CXX_DOUBLE_COMPLEX, &sz);  CHECK_INT(sz, 2 * (int) sizeof(double));
    MPI_Type_extent(MPI_DOUBLE, &ext);  CHECK_INT((int) ext, (int) sizeof(double));
 
    /* ---- MPI_Get_address ------------------------------------------------- */
