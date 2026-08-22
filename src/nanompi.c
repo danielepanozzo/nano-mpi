@@ -154,10 +154,19 @@ static void pack(const void *buf, int count, int dt, char *out)
    }
    for (c = 0; c < count; c++)
    {
-      const char *base = d->abs ? NULL : ((const char *) buf + (size_t) c * d->size);
+      const char *base = (const char *) buf + (size_t) c * d->size;
       for (b = 0; b < d->nblk; b++)
       {
-         memcpy(out + off, base + d->disp[b], d->len[b]);
+         /* An absolute type was built from MPI_Get_address and is used with
+            MPI_BOTTOM, so each displacement IS the address; a relative one is
+            an offset from the caller's buffer. Keep the two apart -- adding an
+            offset to the null pointer MPI_BOTTOM is undefined behaviour, even
+            though every compiler happens to do the obvious thing.
+            (An absolute type therefore names one specific object; count > 1
+            with one is not meaningful and is not supported.) */
+         const char *src = d->abs ? (const char *) (uintptr_t) d->disp[b]
+                                  : base + d->disp[b];
+         memcpy(out + off, src, d->len[b]);
          off += d->len[b];
       }
    }
@@ -179,12 +188,14 @@ static void unpack(const char *in, void *buf, int count, int dt, size_t avail)
    }
    for (c = 0; c < count; c++)
    {
-      char *base = d->abs ? NULL : ((char *) buf + (size_t) c * d->size);
+      char *base = (char *) buf + (size_t) c * d->size;
       for (b = 0; b < d->nblk; b++)
       {
          size_t n = d->len[b];
+         char *dst = d->abs ? (char *) (uintptr_t) d->disp[b]   /* see pack() */
+                            : base + d->disp[b];
          if (off + n > avail) { n = (off < avail) ? (avail - off) : 0; }
-         if (n) { memcpy(base + d->disp[b], in + off, n); }
+         if (n) { memcpy(dst, in + off, n); }
          off += d->len[b];
       }
    }
@@ -1042,13 +1053,26 @@ int nanompi_default_ranks(void)
 
 /* Build the implicit one-rank world. Only ever reached before a team exists,
    but locked anyway so two threads racing to first use cannot both build it. */
+/* Hand the implicit world back at exit. Nothing else will: a caller that never
+   started a team never calls anything that tears one down, so without this the
+   one-rank world is a permanent allocation and a leak checker says so. */
+static void free_auto_universe(void)
+{
+   pthread_mutex_lock(&g_auto_mtx);
+   if (g_auto_universe) { universe_free(); g_auto_universe = 0; }
+   pthread_mutex_unlock(&g_auto_mtx);
+}
+
 static void ensure_universe(void)
 {
+   static int registered = 0;   /* atexit slots are finite; take one, once */
+
    pthread_mutex_lock(&g_auto_mtx);
    if (!g_universe_up)
    {
       universe_init(1);
       g_auto_universe = 1;
+      if (!registered) { atexit(free_auto_universe); registered = 1; }
    }
    pthread_mutex_unlock(&g_auto_mtx);
 }
