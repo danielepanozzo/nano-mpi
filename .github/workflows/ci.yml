@@ -25,13 +25,13 @@ jobs:
           - { os: ubuntu-24.04-arm, name: "Linux arm64 gcc",    cc: gcc }
           - { os: ubuntu-24.04-arm, name: "Linux arm64 clang",  cc: clang }
           - { os: macos-latest,     name: "macOS arm64 clang",  cc: clang }
-          - { os: macos-13,         name: "macOS x86-64 clang", cc: clang }
           - { os: windows-latest,   name: "Windows x64 MSVC",   cc: "" }
     steps:
       - uses: actions/checkout@v4
 
       # Windows takes MSVC as CMake finds it; everywhere else the compiler is
-      # part of what the job is testing.
+      # part of what the job is testing. No x86-64 macOS: those runners queue
+      # for far longer than the coverage is worth.
       - name: Configure (MSVC)
         if: runner.os == 'Windows'
         run: cmake -S . -B build -A x64
