@@ -317,6 +317,46 @@ int MPI_Scatterv(const void *sendbuf, const int *sendcounts, const int *displs,
 int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
                  void *recvbuf, int recvcount, MPI_Datatype recvtype, MPI_Comm comm);
 
+int MPI_Exscan(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype,
+               MPI_Op op, MPI_Comm comm);
+
+/* Nonblocking collectives. Each does the collective and hands back a request
+ * that is already complete -- legal, but there is no overlap to exploit: the
+ * call returns when the collective is done, not before. Code written for
+ * overlap runs correctly, it just does not go faster. */
+int MPI_Ibarrier(MPI_Comm comm, MPI_Request *request);
+int MPI_Ibcast(void *buffer, int count, MPI_Datatype datatype, int root,
+               MPI_Comm comm, MPI_Request *request);
+int MPI_Ireduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype,
+                MPI_Op op, int root, MPI_Comm comm, MPI_Request *request);
+int MPI_Iallreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype,
+                   MPI_Op op, MPI_Comm comm, MPI_Request *request);
+int MPI_Iscan(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype,
+              MPI_Op op, MPI_Comm comm, MPI_Request *request);
+int MPI_Iexscan(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype,
+                MPI_Op op, MPI_Comm comm, MPI_Request *request);
+int MPI_Igather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                int root, MPI_Comm comm, MPI_Request *request);
+int MPI_Igatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                 void *recvbuf, const int *recvcounts, const int *displs,
+                 MPI_Datatype recvtype, int root, MPI_Comm comm, MPI_Request *request);
+int MPI_Iallgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                   void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                   MPI_Comm comm, MPI_Request *request);
+int MPI_Iallgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                    void *recvbuf, const int *recvcounts, const int *displs,
+                    MPI_Datatype recvtype, MPI_Comm comm, MPI_Request *request);
+int MPI_Iscatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                 void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                 int root, MPI_Comm comm, MPI_Request *request);
+int MPI_Iscatterv(const void *sendbuf, const int *sendcounts, const int *displs,
+                  MPI_Datatype sendtype, void *recvbuf, int recvcount,
+                  MPI_Datatype recvtype, int root, MPI_Comm comm, MPI_Request *request);
+int MPI_Ialltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                  void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                  MPI_Comm comm, MPI_Request *request);
+
 int MPI_Op_create(MPI_User_function *function, int commute, MPI_Op *op);
 int MPI_Op_free(MPI_Op *op);
 

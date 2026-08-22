@@ -61,6 +61,55 @@ static int rank_main(int argc, char **argv, void *user)
       CHECK_INT(got, (me + 1) * (me + 2) / 2);
    }
 
+   /* ---- Exscan (exclusive prefix) --------------------------------------- */
+   {
+      int s = me + 1, got = -12345;
+      MPI_Exscan(&s, &got, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+      if (me == 0)
+      {
+         /* the standard leaves rank 0's recvbuf undefined; ours must at least
+            not have written garbage over it */
+         CHECK_INT(got, -12345);
+      }
+      else
+      {
+         CHECK_INT(got, me * (me + 1) / 2);
+      }
+   }
+
+   /* ---- the nonblocking forms give the same answers ---------------------- */
+   {
+      MPI_Request rq;
+      int s = me + 1, got = -1;
+      int want = np * (np + 1) / 2;
+
+      MPI_Iallreduce(&s, &got, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD, &rq);
+      MPI_Wait(&rq, MPI_STATUS_IGNORE);
+      CHECK_INT(got, want);
+
+      got = (me == 0) ? 4242 : -1;
+      MPI_Ibcast(&got, 1, MPI_INT, 0, MPI_COMM_WORLD, &rq);
+      MPI_Wait(&rq, MPI_STATUS_IGNORE);
+      CHECK_INT(got, 4242);
+
+      MPI_Ibarrier(MPI_COMM_WORLD, &rq);
+      {
+         int flag = 0;
+         MPI_Test(&rq, &flag, MPI_STATUS_IGNORE);
+         CHECK_INT(flag, 1);   /* it completed before it returned */
+      }
+
+      {
+         int *sb = (int *) malloc(sizeof(int) * (size_t) np);
+         int *rb = (int *) malloc(sizeof(int) * (size_t) np);
+         for (i = 0; i < np; i++) { sb[i] = me * np + i; rb[i] = -1; }
+         MPI_Ialltoall(sb, 1, MPI_INT, rb, 1, MPI_INT, MPI_COMM_WORLD, &rq);
+         MPI_Wait(&rq, MPI_STATUS_IGNORE);
+         for (i = 0; i < np; i++) { CHECK_INT(rb[i], i * np + me); }
+         free(sb); free(rb);
+      }
+   }
+
    /* ---- Allgather / Gather ---------------------------------------------- */
    {
       int  s = me * 5;

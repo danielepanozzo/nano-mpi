@@ -43,7 +43,8 @@ Present and intended to work:
 | Point-to-point | `MPI_Send`, `MPI_Recv`, `MPI_Isend`, `MPI_Irecv`, `MPI_Irsend`, `MPI_Sendrecv`, `MPI_Probe`, `MPI_Iprobe`, `MPI_Get_count`, `MPI_PROC_NULL` |
 | Completion | `MPI_Wait`, `MPI_Waitall`, `MPI_Waitany`, `MPI_Test`, `MPI_Testall`, `MPI_Request_free` |
 | Persistent | `MPI_Send_init`, `MPI_Recv_init`, `MPI_Start`, `MPI_Startall` |
-| Collectives | `MPI_Barrier`, `MPI_Bcast`, `MPI_Reduce`, `MPI_Allreduce`, `MPI_Scan`, `MPI_Gather`, `MPI_Gatherv`, `MPI_Allgather`, `MPI_Allgatherv`, `MPI_Scatter`, `MPI_Scatterv`, `MPI_Alltoall` |
+| Collectives | `MPI_Barrier`, `MPI_Bcast`, `MPI_Reduce`, `MPI_Allreduce`, `MPI_Scan`, `MPI_Exscan`, `MPI_Gather`, `MPI_Gatherv`, `MPI_Allgather`, `MPI_Allgatherv`, `MPI_Scatter`, `MPI_Scatterv`, `MPI_Alltoall` |
+| Nonblocking collectives | The `MPI_I*` form of each of the above — but see below |
 | Communicators | `MPI_Comm_rank`, `MPI_Comm_size`, `MPI_Comm_dup`, `MPI_Comm_free`, `MPI_Comm_split`, `MPI_Comm_split_type`, `MPI_Comm_create`, `MPI_Comm_group`, `MPI_Comm_compare` |
 | Groups | `MPI_Group_incl`, `MPI_Group_rank`, `MPI_Group_size`, `MPI_Group_free` |
 | Datatypes | `MPI_Type_contiguous`, `MPI_Type_vector`, `MPI_Type_hvector`, `MPI_Type_create_hvector`, `MPI_Type_struct`, `MPI_Type_create_struct`, `MPI_Type_commit`, `MPI_Type_free`, `MPI_Type_size`, `MPI_Type_extent`, `MPI_Get_address`, `MPI_Address` |
@@ -52,7 +53,18 @@ Present and intended to work:
 | Shared-memory windows | `MPI_Win_allocate_shared`, `MPI_Win_shared_query`, `MPI_Win_free`, `MPI_Win_fence`, `MPI_Win_sync`, `MPI_Win_lock_all`, `MPI_Win_unlock_all` |
 | Timing | `MPI_Wtime`, `MPI_Wtick` |
 
-That is **92 entry points**. The full predefined datatype set of MPI-3 C is
+That is **106 entry points**.
+
+### Nonblocking collectives
+
+`MPI_Iallreduce` and the rest do the collective and hand back a request that is
+**already complete**. That is legal — nothing in MPI requires a nonblocking call
+to defer any work — but be clear about what you get: the call returns when the
+collective is *done*, not before, so there is no overlap to exploit. Code
+written for overlap runs correctly; it just does not go faster.
+
+Doing better means running collectives on a helper thread, and a helper thread
+has no rank (§7). That is a design question, not an oversight. The full predefined datatype set of MPI-3 C is
 present, including the fixed-width `MPI_INT8_T` … `MPI_UINT64_T`, `MPI_C_BOOL`,
 the complex types, and the `MPI_FLOAT_INT`-style pair types — plus `MPI_CXX_BOOL`
 and the `MPI_CXX_*_COMPLEX` types, which are datatypes in the standard rather

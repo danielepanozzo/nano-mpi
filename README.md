@@ -170,8 +170,10 @@ race in your own code, building against a sanitized nano-mpi is a good idea.
 
 ## What is and is not implemented
 
-92 entry points: point-to-point (blocking, nonblocking, persistent, probes,
-wildcards, `MPI_PROC_NULL`), the twelve common collectives with `MPI_IN_PLACE`,
+106 entry points: point-to-point (blocking, nonblocking, persistent, probes,
+wildcards, `MPI_PROC_NULL`), the common collectives with `MPI_IN_PLACE` and
+their nonblocking `MPI_I*` forms (which complete before they return — legal, but
+no overlap),
 communicators and groups, derived datatypes, the full predefined datatype set of
 MPI-3 C, all the predefined reduction operators including `MPI_MAXLOC` /
 `MPI_MINLOC`, user-defined operators, and **shared-memory windows**. The

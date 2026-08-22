@@ -2296,10 +2296,21 @@ int MPI_Startall( int count, MPI_Request *array_of_requests )
    return 0;
 }
 
+/* MPI_STATUS_IGNORE is a null pointer here, so this is also the "caller does
+   not want a status" case. */
+static void empty_status(MPI_Status *st)
+{
+   if (!st) { return; }
+   st->MPI_SOURCE = MPI_ANY_SOURCE;
+   st->MPI_TAG    = MPI_ANY_TAG;
+   st->MPI_ERROR  = MPI_SUCCESS;
+   st->nanompi_count = 0;
+}
+
 int MPI_Wait( MPI_Request *request, MPI_Status *status )
 {
    nmpi_req *r = req_get(*request);
-   if (!r) { return 0; }
+   if (!r) { empty_status(status); return MPI_SUCCESS; }
 
    if (r->kind == 4)            /* persistent recv: completes, handle stays valid */
    {
@@ -2355,7 +2366,7 @@ int MPI_Test( MPI_Request *request, int *flag, MPI_Status *status )
    nmpi_inbox *b;
    int done;
 
-   if (!r) { *flag = 1; return 0; }
+   if (!r) { *flag = 1; empty_status(status); return MPI_SUCCESS; }
    if (r->kind == 1 || r->kind == 3) { MPI_Wait(request, status); *flag = 1; return 0; }
    if (r->kind == 4 && !r->active) { *flag = 1; return 0; }
 
@@ -2565,6 +2576,155 @@ int MPI_Op_free( MPI_Op *op )
    }
    return 0;
 }
+
+/* Exclusive prefix: rank r reduces ranks 0..r-1, and rank 0's recvbuf is left
+   alone -- the standard leaves it undefined rather than zeroed, because there
+   is no identity element to write for a user-defined operator. */
+int MPI_Exscan( const void *sendbuf, void *recvbuf, int count,
+                MPI_Datatype datatype, MPI_Op op, MPI_Comm comm )
+{
+   nmpi_comm *k = comm_get(comm);
+   int    me = comm_rank_of(comm);
+   size_t nb = msg_bytes(count, datatype);
+   void  *inplace = NULL;
+
+   if (sendbuf == MPI_IN_PLACE)
+   {
+      inplace = malloc(nb ? nb : 1);
+      if (!inplace) { fprintf(stderr, "nano-mpi: out of memory in MPI_Exscan\n"); abort(); }
+      memcpy(inplace, recvbuf, nb);
+      sendbuf = inplace;
+   }
+
+   if (comm == MPI_COMM_SELF || !k || k->size == 1)
+   {
+      free(inplace);
+      return MPI_SUCCESS;
+   }
+   k->ptr[me] = sendbuf;          /* rank 0 publishes too: rank 1 reads it */
+   comm_barrier(comm);
+   if (me > 0) { reduce_all(recvbuf, k->ptr, me, count, datatype, op, nb); }
+   comm_barrier(comm);
+   free(inplace);
+   return MPI_SUCCESS;
+}
+
+/*--------------------------------------------------------------------------
+ * Nonblocking collectives
+ *
+ * Each does the collective and hands back a request that is already complete.
+ * That is legal -- nothing in MPI requires a nonblocking call to defer any
+ * work -- but be clear about what you get: the call returns when the
+ * collective is *done*, not before, so there is no overlap to exploit. Code
+ * written for overlap still runs correctly; it just does not go faster.
+ *
+ * Doing better means running collectives on a helper thread, and a helper
+ * thread has no rank. That is a design question, not an oversight.
+ *--------------------------------------------------------------------------*/
+#define NMPI_ICOLL(call)                                                      \
+   do {                                                                       \
+      int ierr_ = (call);                                                      \
+      *request = MPI_REQUEST_NULL;                                             \
+      return ierr_;                                                            \
+   } while (0)
+
+int MPI_Ibarrier( MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Barrier(comm));
+}
+
+int MPI_Ibcast( void *buffer, int count, MPI_Datatype datatype, int root,
+                MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Bcast(buffer, count, datatype, root, comm));
+}
+
+int MPI_Ireduce( const void *sendbuf, void *recvbuf, int count,
+                 MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm,
+                 MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm));
+}
+
+int MPI_Iallreduce( const void *sendbuf, void *recvbuf, int count,
+                    MPI_Datatype datatype, MPI_Op op, MPI_Comm comm,
+                    MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm));
+}
+
+int MPI_Iscan( const void *sendbuf, void *recvbuf, int count,
+               MPI_Datatype datatype, MPI_Op op, MPI_Comm comm,
+               MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Scan(sendbuf, recvbuf, count, datatype, op, comm));
+}
+
+int MPI_Iexscan( const void *sendbuf, void *recvbuf, int count,
+                 MPI_Datatype datatype, MPI_Op op, MPI_Comm comm,
+                 MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Exscan(sendbuf, recvbuf, count, datatype, op, comm));
+}
+
+int MPI_Igather( const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                 void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                 int root, MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Gather(sendbuf, sendcount, sendtype,
+                         recvbuf, recvcount, recvtype, root, comm));
+}
+
+int MPI_Igatherv( const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                  void *recvbuf, const int *recvcounts, const int *displs,
+                  MPI_Datatype recvtype, int root, MPI_Comm comm,
+                  MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Gatherv(sendbuf, sendcount, sendtype,
+                          recvbuf, recvcounts, displs, recvtype, root, comm));
+}
+
+int MPI_Iallgather( const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                    void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                    MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Allgather(sendbuf, sendcount, sendtype,
+                            recvbuf, recvcount, recvtype, comm));
+}
+
+int MPI_Iallgatherv( const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                     void *recvbuf, const int *recvcounts, const int *displs,
+                     MPI_Datatype recvtype, MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Allgatherv(sendbuf, sendcount, sendtype,
+                             recvbuf, recvcounts, displs, recvtype, comm));
+}
+
+int MPI_Iscatter( const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                  void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                  int root, MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Scatter(sendbuf, sendcount, sendtype,
+                          recvbuf, recvcount, recvtype, root, comm));
+}
+
+int MPI_Iscatterv( const void *sendbuf, const int *sendcounts, const int *displs,
+                   MPI_Datatype sendtype, void *recvbuf, int recvcount,
+                   MPI_Datatype recvtype, int root, MPI_Comm comm,
+                   MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Scatterv(sendbuf, sendcounts, displs, sendtype,
+                           recvbuf, recvcount, recvtype, root, comm));
+}
+
+int MPI_Ialltoall( const void *sendbuf, int sendcount, MPI_Datatype sendtype,
+                   void *recvbuf, int recvcount, MPI_Datatype recvtype,
+                   MPI_Comm comm, MPI_Request *request )
+{
+   NMPI_ICOLL(MPI_Alltoall(sendbuf, sendcount, sendtype,
+                           recvbuf, recvcount, recvtype, comm));
+}
+#undef NMPI_ICOLL
 
 int MPI_Op_create( MPI_User_function *function, int commute,
                                MPI_Op *op )
