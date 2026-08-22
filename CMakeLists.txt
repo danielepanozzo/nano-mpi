@@ -79,6 +79,14 @@ if (NANOMPI_INSTALL)
           NAMESPACE nanompi::
           DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nanompi)
 
+  # The build-tree half of the same export. A parent project that adds nano-mpi
+  # as a subdirectory and then exports its own targets needs this one to exist:
+  # CMake refuses to export a target that links a target which is in no export
+  # set at all, and hypre does exactly that.
+  export(EXPORT nanompiTargets
+         FILE      "${CMAKE_CURRENT_BINARY_DIR}/nanompiTargets.cmake"
+         NAMESPACE nanompi::)
+
   configure_package_config_file(
     cmake/nanompi-config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/nanompi-config.cmake
