@@ -152,20 +152,21 @@ static void pack(const void *buf, int count, int dt, char *out)
       memcpy(out, buf, msg_bytes(count, dt));
       return;
    }
+   /* An absolute type was built from MPI_Get_address and is used with
+      MPI_BOTTOM, so each displacement IS the address; a relative one is an
+      offset from the caller's buffer. The two never share an expression:
+      MPI_BOTTOM is a null pointer, and adding an offset to one is undefined
+      behaviour -- including a zero offset -- even though every compiler
+      happens to do the obvious thing.
+      (An absolute type names one specific object, so count > 1 with one is not
+      meaningful and is not supported.) */
    for (c = 0; c < count; c++)
    {
-      const char *base = (const char *) buf + (size_t) c * d->size;
       for (b = 0; b < d->nblk; b++)
       {
-         /* An absolute type was built from MPI_Get_address and is used with
-            MPI_BOTTOM, so each displacement IS the address; a relative one is
-            an offset from the caller's buffer. Keep the two apart -- adding an
-            offset to the null pointer MPI_BOTTOM is undefined behaviour, even
-            though every compiler happens to do the obvious thing.
-            (An absolute type therefore names one specific object; count > 1
-            with one is not meaningful and is not supported.) */
-         const char *src = d->abs ? (const char *) (uintptr_t) d->disp[b]
-                                  : base + d->disp[b];
+         const char *src;
+         if (d->abs) { src = (const char *) (uintptr_t) d->disp[b]; }
+         else { src = (const char *) buf + (size_t) c * d->size + d->disp[b]; }
          memcpy(out + off, src, d->len[b]);
          off += d->len[b];
       }
@@ -188,12 +189,12 @@ static void unpack(const char *in, void *buf, int count, int dt, size_t avail)
    }
    for (c = 0; c < count; c++)
    {
-      char *base = (char *) buf + (size_t) c * d->size;
       for (b = 0; b < d->nblk; b++)
       {
          size_t n = d->len[b];
-         char *dst = d->abs ? (char *) (uintptr_t) d->disp[b]   /* see pack() */
-                            : base + d->disp[b];
+         char  *dst;                                        /* see pack() */
+         if (d->abs) { dst = (char *) (uintptr_t) d->disp[b]; }
+         else { dst = (char *) buf + (size_t) c * d->size + d->disp[b]; }
          if (off + n > avail) { n = (off < avail) ? (avail - off) : 0; }
          if (n) { memcpy(dst, in + off, n); }
          off += d->len[b];

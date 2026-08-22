@@ -40,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - san: address,undefined
+          - san: address,undefined,pointer-overflow
             name: asan
           - san: thread
             name: tsan
